@@ -1,0 +1,921 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Synathic — Verify what your agent actually did</title>
+<meta name="description" content="Synathic checks your database, not your agent's word. Postcondition verification for AI agents in production.">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2318120C'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%232F6E4F'/%3E%3C/svg%3E">
+<link rel="canonical" href="https://synathic.com/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Synathic — Verify what your agent actually did">
+<meta property="og:description" content="Your agent said it created the customer. Your database says otherwise. Synathic checks Postgres after every agent action.">
+<meta property="og:url" content="https://synathic.com/">
+<meta property="og:image" content="https://synathic.com/og-image.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:site" content="@Foundergallegos">
+<meta name="twitter:title" content="Synathic — Verify what your agent actually did">
+<meta name="twitter:description" content="Your agent said it created the customer. Your database says otherwise.">
+<meta name="twitter:image" content="https://synathic.com/og-image.png">
+<!-- NOTE: og:image / twitter:image point to a file that doesn't exist yet.
+     Create a 1200x630 image, host it at that path once you have a domain, or these will break. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#FAF8F3;
+    --panel:#FFFFFF;
+    --ink:#18120C;
+    --taupe:#8A8175;
+    --taupe-light:#C9C2B4;
+    --line:#E6E0D4;
+    --pass:#2F6E4F;
+    --pass-bg:#EAF3EE;
+    --fail:#6E1E2B;
+    --fail-bg:#F3E7E8;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html{scroll-behavior:smooth;}
+  body{
+    background-color:var(--bg);
+    background-image:radial-gradient(var(--taupe-light) 0.6px, transparent 0.6px);
+    background-size:16px 16px;
+    color:var(--ink);
+    font-family:'Inter',sans-serif;
+    line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+  }
+  h1,h2,h3{font-family:'Space Grotesk',sans-serif;letter-spacing:-0.02em;}
+  .mono{font-family:'JetBrains Mono',monospace;}
+  a{color:inherit;text-decoration:none;}
+  .wrap{max-width:880px;margin:0 auto;padding:0 24px;}
+
+  /* NAV */
+  nav{padding:28px 0;}
+  .nav-inner{max-width:880px;margin:0 auto;padding:0 24px;display:flex;justify-content:space-between;align-items:center;}
+  .logo{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:18px;display:flex;align-items:center;gap:8px;}
+  .logo-dot{width:8px;height:8px;background:var(--pass);border-radius:50%;display:inline-block;}
+  .nav-link{font-size:14px;color:var(--bg);border:1px solid var(--ink);padding:9px 18px;border-radius:100px;background:var(--ink);font-weight:500;transition:opacity .2s ease;}
+  .nav-link:hover{opacity:.82;}
+  .contact-link{font-size:14px;color:var(--ink);font-weight:500;padding:9px 4px;border-bottom:1px solid transparent;transition:border-color .2s ease;}
+  .contact-link:hover{border-bottom-color:var(--ink);}
+  .nav-right{display:flex;align-items:center;gap:18px;}
+
+  .hero-meta{
+    display:flex;align-items:center;justify-content:center;gap:16px;
+    font-size:13px;color:var(--taupe);
+  }
+  .hero-meta .dot-sep{color:var(--taupe-light);}
+  .hero-meta a{
+    display:inline-flex;align-items:center;gap:6px;color:var(--taupe);
+    transition:color .2s ease;
+  }
+  .hero-meta a:hover{color:var(--ink);}
+  .hero-meta svg{width:15px;height:15px;flex-shrink:0;}
+  .hero-meta-top{margin-bottom:36px;}
+
+  .db-input{
+    display:block;max-width:420px;margin:12px auto 0;padding:11px 16px;
+    border:1px solid var(--line);border-radius:10px;background:transparent;
+    font-family:'Inter',sans-serif;font-size:13.5px;color:var(--ink);text-align:center;
+    transition:border-color .2s ease;
+  }
+  .db-input::placeholder{color:var(--taupe-light);}
+  .db-input:focus{outline:none;border-color:var(--taupe);}
+
+  .secondary-cta{color:var(--ink);border-bottom:1px solid var(--taupe-light);margin-left:4px;transition:border-color .2s ease;}
+  .secondary-cta:hover{border-bottom-color:var(--ink);}
+
+  /* HERO */
+  .hero{padding:64px 0 56px;text-align:center;}
+  .hero h1{font-size:44px;font-weight:600;line-height:1.15;max-width:680px;margin:0 auto 20px;}
+  .hero h1 .fail-word{color:var(--fail);}
+  .hero p.sub{font-size:17px;color:var(--taupe);max-width:520px;margin:0 auto 36px;}
+
+  /* WAITLIST FORM */
+  .waitlist-form{display:flex;gap:10px;max-width:420px;margin:0 auto;}
+  .waitlist-form input{
+    flex:1;padding:14px 16px;border:1px solid var(--line);border-radius:10px;
+    font-family:'Inter',sans-serif;font-size:15px;background:var(--panel);color:var(--ink);
+  }
+  .waitlist-form input:focus{outline:none;border-color:var(--ink);}
+  .waitlist-form button{
+    padding:14px 22px;
+    background:linear-gradient(155deg, #241B12 0%, var(--ink) 55%, #100C08 100%);
+    color:var(--bg);border:none;border-radius:10px;
+    font-family:'Inter',sans-serif;font-weight:600;font-size:15px;cursor:pointer;
+    white-space:nowrap;
+    box-shadow:0 1px 2px rgba(24,18,12,0.15), 0 6px 14px rgba(24,18,12,0.12);
+    transition:transform .2s cubic-bezier(.22,.61,.36,1), box-shadow .2s cubic-bezier(.22,.61,.36,1), background .2s ease;
+  }
+  .waitlist-form button:hover{
+    transform:translateY(-1px);
+    background:linear-gradient(155deg, #2E241A 0%, #241B12 55%, #100C08 100%);
+    box-shadow:0 2px 4px rgba(24,18,12,0.18), 0 10px 20px rgba(24,18,12,0.16);
+  }
+  .waitlist-form button:active{transform:translateY(0);}
+  .waitlist-form button:disabled{opacity:.6;cursor:default;transform:none;}
+  .waitlist-note{font-size:13px;color:var(--taupe-light);margin-top:14px;}
+  .waitlist-success{
+    display:none;max-width:420px;margin:0 auto;padding:14px 18px;background:var(--pass-bg);
+    border:1px solid var(--pass);color:var(--pass);border-radius:10px;font-size:14px;font-weight:500;
+  }
+  .waitlist-error{
+    display:none;max-width:420px;margin:10px auto 0;font-size:13px;color:var(--fail);
+  }
+
+  /* TERMINAL / SIGNATURE ELEMENT */
+  .terminal-tabs{
+    display:flex;justify-content:center;gap:6px;margin:52px auto 14px;max-width:560px;
+  }
+  .terminal-tab{
+    font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:500;
+    padding:8px 16px;border-radius:100px;border:1px solid var(--line);
+    background:var(--panel);color:var(--taupe);cursor:pointer;
+    transition:background .2s ease, color .2s ease, border-color .2s ease;
+  }
+  .terminal-tab:hover{color:var(--ink);border-color:var(--taupe-light);}
+  .terminal-tab.active{background:var(--ink);color:var(--bg);border-color:var(--ink);}
+  .terminal-tab:disabled{cursor:default;opacity:.7;}
+  .terminal-shell{
+    max-width:560px;margin:0 auto;background:var(--ink);border-radius:14px;
+    overflow:hidden;box-shadow:0 30px 60px -20px rgba(24,18,12,0.35);text-align:left;
+  }
+  .terminal-bar{
+    display:flex;align-items:center;gap:6px;padding:12px 16px;background:#241C14;
+  }
+  .terminal-dot{width:9px;height:9px;border-radius:50%;background:#4A3E30;}
+  .terminal-label{margin-left:auto;font-family:'JetBrains Mono',monospace;font-size:11px;color:#8A7D6A;}
+  .terminal-body{padding:22px 20px;font-family:'JetBrains Mono',monospace;font-size:13px;color:#D8CFC0;}
+  .terminal-line{margin-bottom:10px;display:flex;gap:10px;}
+  .terminal-line .lbl{color:#7A6F5E;min-width:118px;}
+  .status-badge{
+    display:inline-flex;align-items:center;gap:6px;padding:2px 10px;border-radius:100px;
+    font-size:11px;font-weight:600;letter-spacing:.03em;
+  }
+  .status-pass{background:var(--pass-bg);color:var(--pass);}
+  .status-fail{background:var(--fail-bg);color:var(--fail);}
+  .terminal-divider{height:1px;background:#2E2418;margin:14px 0;transition:opacity .4s ease;}
+  .terminal-verdict{font-size:13px;color:#D8CFC0;transition:opacity .5s ease, transform .5s ease;transform:translateY(4px);}
+  .terminal-verdict.show{opacity:1 !important;transform:translateY(0);}
+  .terminal-verdict b{color:#F2C4BC;}
+
+  .t-cursor{
+    display:inline-block;width:6px;height:14px;background:#D8CFC0;margin-left:2px;
+    vertical-align:middle;animation:tblink 1s step-end infinite;
+  }
+  @keyframes tblink{0%,100%{opacity:1;}50%{opacity:0;}}
+  .status-badge.pop{animation:tpop .35s cubic-bezier(.34,1.56,.64,1);}
+  @keyframes tpop{from{opacity:0;transform:scale(.85);}to{opacity:1;transform:scale(1);}}
+
+  /* SECTION SHARED */
+  section{padding:72px 0;}
+  .section-label{
+    font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--taupe);
+    text-transform:uppercase;letter-spacing:.1em;margin-bottom:14px;
+  }
+  section h2{font-size:30px;font-weight:600;max-width:560px;margin-bottom:16px;}
+  section > .wrap > p.lead{color:var(--taupe);font-size:16px;max-width:520px;margin-bottom:8px;}
+
+  /* WHY NOW */
+  .why-now{padding:0 0 56px;}
+  .why-now-text{
+    text-align:center;font-size:17px;line-height:1.6;color:var(--taupe);
+    max-width:600px;margin:0 auto;
+  }
+  .why-now-text span{color:var(--ink);font-weight:600;}
+
+  /* PROBLEM */
+  .problem-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-top:36px;}
+  .problem-card{
+    background:var(--panel);border:1px solid rgba(24,18,12,0.06);border-radius:12px;padding:22px;
+    box-shadow:0 1px 2px rgba(24,18,12,0.04), 0 4px 8px rgba(24,18,12,0.02);
+    transition:transform .25s cubic-bezier(.22,.61,.36,1), box-shadow .25s cubic-bezier(.22,.61,.36,1);
+  }
+  .problem-card:hover{
+    transform:translateY(-3px);
+    box-shadow:0 4px 10px rgba(24,18,12,0.06), 0 12px 24px rgba(24,18,12,0.06);
+  }
+  .problem-card .num{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--fail);margin-bottom:10px;display:block;}
+  .problem-card h3{font-size:16px;font-weight:600;margin-bottom:8px;}
+  .problem-card p{font-size:14px;color:var(--taupe);}
+
+  /* BEFORE / AFTER */
+  .compare{margin-top:32px;display:flex;flex-direction:column;gap:14px;}
+  .compare-row{
+    background:var(--panel);border:1px solid rgba(24,18,12,0.06);border-radius:12px;
+    padding:22px 24px;box-shadow:0 1px 2px rgba(24,18,12,0.04), 0 4px 8px rgba(24,18,12,0.02);
+  }
+  .compare-label{
+    display:block;font-family:'JetBrains Mono',monospace;font-size:12px;
+    text-transform:uppercase;letter-spacing:.08em;color:var(--taupe);margin-bottom:14px;
+  }
+  .flow{display:flex;align-items:center;flex-wrap:wrap;gap:10px;}
+  .flow-step{
+    font-family:'JetBrains Mono',monospace;font-size:13px;padding:7px 12px;border-radius:8px;
+    background:var(--bg);border:1px solid var(--line);color:var(--ink);white-space:nowrap;
+  }
+  .flow-step.muted{color:var(--taupe-light);border-style:dashed;}
+  .flow-step.bad{background:var(--fail-bg);border-color:transparent;color:var(--fail);font-weight:600;}
+  .flow-step.good{background:var(--pass-bg);border-color:transparent;color:var(--pass);font-weight:600;}
+  .arrow{color:var(--taupe-light);font-size:14px;}
+
+  /* TESTIMONIALS MARQUEE */
+  .testimonials-section{padding:72px 0;overflow:hidden;}
+  .testimonials-section .wrap{overflow:visible;}
+  .marquee-wrap{
+    position:relative;width:100%;overflow:hidden;margin-top:36px;
+    -webkit-mask-image:linear-gradient(to right, transparent, black 64px, black calc(100% - 64px), transparent);
+    mask-image:linear-gradient(to right, transparent, black 64px, black calc(100% - 64px), transparent);
+  }
+  .marquee-track{
+    display:flex;gap:16px;width:max-content;
+    animation:marquee-scroll 50s linear infinite;
+  }
+  .marquee-wrap:hover .marquee-track{animation-play-state:paused;}
+  @keyframes marquee-scroll{
+    from{transform:translateX(0);}
+    to{transform:translateX(-50%);}
+  }
+  .t-card{
+    flex:0 0 300px;width:300px;background:var(--panel);border:1px solid rgba(24,18,12,0.06);
+    border-radius:14px;padding:24px;
+    box-shadow:0 1px 2px rgba(24,18,12,0.04), 0 4px 8px rgba(24,18,12,0.02);
+    transition:transform .25s cubic-bezier(.22,.61,.36,1), box-shadow .25s cubic-bezier(.22,.61,.36,1);
+  }
+  .t-card:hover{
+    transform:translateY(-3px);
+    box-shadow:0 4px 10px rgba(24,18,12,0.06), 0 12px 24px rgba(24,18,12,0.06);
+  }
+  .t-quote{width:20px;height:20px;color:var(--taupe-light);margin-bottom:12px;}
+  .t-quote-text{font-size:14.5px;color:var(--ink);line-height:1.55;margin-bottom:14px;}
+  .t-attr{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--taupe);}
+  .testimonials-footnote{
+    text-align:center;font-size:13.5px;color:var(--taupe);margin-top:28px;
+  }
+
+  @media (prefers-reduced-motion: reduce){
+    .marquee-wrap{overflow-x:auto;-webkit-mask-image:none;mask-image:none;}
+    .marquee-track{animation:none;}
+  }
+
+  /* CODE SECTION */
+  .code-section{background:var(--panel);border-top:1px solid var(--line);border-bottom:1px solid var(--line);}
+  .code-block-wrap{position:relative;margin-top:32px;}
+  .copy-btn{
+    position:absolute;top:14px;right:14px;z-index:2;
+    background:rgba(255,255,255,0.08);color:#D8CFC0;border:1px solid rgba(255,255,255,0.14);
+    font-family:'JetBrains Mono',monospace;font-size:11.5px;padding:6px 12px;border-radius:6px;
+    cursor:pointer;transition:background .2s ease;
+  }
+  .copy-btn:hover{background:rgba(255,255,255,0.16);}
+  .code-block{
+    background:var(--ink);border-radius:12px;padding:24px 26px;
+    font-family:'JetBrains Mono',monospace;font-size:13.5px;line-height:1.7;color:#D8CFC0;overflow-x:auto;
+  }
+  .code-block .cm{color:#7A6F5E;}
+  .code-block .kw{color:#F2C4BC;}
+  .code-block .fn{color:#A9C9B5;}
+  .code-block .str{color:#D9C88F;}
+
+  /* HOW IT WORKS */
+  .steps{margin-top:36px;display:flex;flex-direction:column;gap:12px;}
+  .step{
+    display:flex;gap:20px;padding:24px;align-items:flex-start;
+    background:var(--panel);border:1px solid rgba(24,18,12,0.06);border-radius:12px;
+    box-shadow:0 1px 2px rgba(24,18,12,0.04), 0 4px 8px rgba(24,18,12,0.02);
+    transition:transform .25s cubic-bezier(.22,.61,.36,1), box-shadow .25s cubic-bezier(.22,.61,.36,1);
+  }
+  .step:hover{
+    transform:translateY(-2px);
+    box-shadow:0 4px 10px rgba(24,18,12,0.06), 0 12px 24px rgba(24,18,12,0.06);
+  }
+  .step-status{
+    font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:600;
+    padding:4px 10px;border-radius:100px;height:fit-content;white-space:nowrap;margin-top:2px;
+  }
+  .step-status.pending{background:#F1EDE3;color:var(--taupe);}
+  .step-status.pass{background:var(--pass-bg);color:var(--pass);}
+  .step-content h3{font-size:16px;font-weight:600;margin-bottom:6px;}
+  .step-content p{font-size:14px;color:var(--taupe);}
+
+  /* FINAL CTA */
+  .final-cta{text-align:center;}
+  .final-cta h2{margin:0 auto 12px;max-width:480px;}
+  .final-cta p.lead{margin:0 auto 32px;}
+
+  /* FAQ */
+  .faq-list{margin-top:32px;display:flex;flex-direction:column;gap:10px;}
+  .faq-item{
+    background:var(--panel);border:1px solid rgba(24,18,12,0.06);border-radius:12px;
+    padding:18px 22px;box-shadow:0 1px 2px rgba(24,18,12,0.04), 0 4px 8px rgba(24,18,12,0.02);
+  }
+  .faq-item summary{
+    cursor:pointer;font-weight:600;font-size:15px;list-style:none;
+    display:flex;justify-content:space-between;align-items:center;
+  }
+  .faq-item summary::-webkit-details-marker{display:none;}
+  .faq-item summary::after{content:'+';color:var(--taupe);font-size:18px;font-weight:400;margin-left:12px;transition:transform .2s ease;}
+  .faq-item[open] summary::after{transform:rotate(45deg);}
+  .faq-item p{margin-top:12px;font-size:14px;color:var(--taupe);line-height:1.6;}
+
+  /* FOOTER */
+  footer{padding:52px 0 40px;border-top:1px solid var(--line);margin-top:24px;}
+  .footer-grid{display:flex;justify-content:space-between;gap:28px;flex-wrap:wrap;margin-bottom:32px;}
+  .footer-brand p{font-size:13px;color:var(--taupe);max-width:260px;margin-top:8px;line-height:1.6;}
+  .footer-col h4{font-family:'JetBrains Mono',monospace;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--taupe-light);margin-bottom:12px;}
+  .footer-col{display:flex;flex-direction:column;gap:8px;}
+  .footer-soon{font-size:14px;color:var(--taupe-light);cursor:default;}
+  .footer-soon span{font-size:12px;}
+  .footer-col a{font-size:14px;color:var(--taupe);transition:color .2s ease;}
+  .footer-col a:hover{color:var(--ink);}
+  .footer-bottom{
+    display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:14px;
+    padding-top:24px;border-top:1px solid var(--line);
+  }
+  .footer-bottom p{font-size:12.5px;color:var(--taupe-light);}
+  .footer-social{display:flex;gap:16px;}
+  .footer-social a{display:inline-flex;color:var(--taupe);transition:color .2s ease;}
+  .footer-social a:hover{color:var(--ink);}
+  .footer-social svg{width:16px;height:16px;}  /* ANIMATIONS — soft, deliberate, never abrupt */
+  @keyframes fadeUp{
+    from{opacity:0;transform:translateY(14px);}
+    to{opacity:1;transform:translateY(0);}
+  }
+  .hero-fade{opacity:0;animation:fadeUp 1s cubic-bezier(.22,.61,.36,1) forwards;}
+  .hero-fade.d1{animation-delay:.05s;}
+  .hero-fade.d2{animation-delay:.18s;}
+  .hero-fade.d3{animation-delay:.32s;}
+  .hero-fade.d4{animation-delay:.44s;}
+  .hero-fade.d5{animation-delay:.58s;}
+
+  .reveal{
+    opacity:0;transform:translateY(18px);
+    transition:opacity .9s cubic-bezier(.22,.61,.36,1), transform .9s cubic-bezier(.22,.61,.36,1);
+  }
+  .reveal.is-visible{opacity:1;transform:translateY(0);}
+  .reveal-child{
+    opacity:0;transform:translateY(14px);
+    transition:opacity .8s cubic-bezier(.22,.61,.36,1), transform .8s cubic-bezier(.22,.61,.36,1);
+  }
+  .reveal.is-visible .reveal-child{opacity:1;transform:translateY(0);}
+  .reveal.is-visible .reveal-child:nth-child(1){transition-delay:.05s;}
+  .reveal.is-visible .reveal-child:nth-child(2){transition-delay:.14s;}
+  .reveal.is-visible .reveal-child:nth-child(3){transition-delay:.23s;}
+  .reveal.is-visible .reveal-child:nth-child(4){transition-delay:.32s;}
+
+  @media (prefers-reduced-motion: reduce){
+    .hero-fade,.reveal,.reveal-child{opacity:1;transform:none;animation:none;transition:none;}
+  }
+
+  /* RESPONSIVE — tablet */
+  @media (max-width:860px){
+    .wrap{padding:0 20px;}
+    .problem-grid{grid-template-columns:1fr 1fr;}
+  }
+
+  /* RESPONSIVE — mobile */
+  @media (max-width:640px){
+    nav{padding:20px 0;}
+    .hero{padding:44px 0 40px;}
+    .hero h1{font-size:28px;}
+    .hero p.sub{font-size:15.5px;}
+    .waitlist-form{flex-direction:column;}
+    .waitlist-form button{width:100%;}
+    .problem-grid{grid-template-columns:1fr;}
+    .terminal-line{flex-direction:column;gap:2px;}
+    .terminal-line .lbl{min-width:0;}
+    .terminal-shell{margin-top:36px;}
+    section{padding:48px 0;}
+    section h2{font-size:24px;}
+    .step{gap:14px;}
+    .hero-meta{flex-wrap:wrap;row-gap:8px;}
+    .flow{gap:8px;}
+    .flow-step{font-size:12px;padding:6px 10px;}
+    .footer-grid{flex-direction:column;gap:24px;}
+    .footer-bottom{flex-direction:column;align-items:flex-start;}
+    .t-card{flex:0 0 260px;width:260px;padding:20px;}
+    .marquee-wrap{-webkit-mask-image:linear-gradient(to right, transparent, black 32px, black calc(100% - 32px), transparent);mask-image:linear-gradient(to right, transparent, black 32px, black calc(100% - 32px), transparent);}
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-inner">
+    <div class="logo">Synathic</div>
+    <div class="nav-right">
+      <a href="mailto:hellosynathic@gmail.com" class="contact-link">Contact</a>
+      <a href="#waitlist" class="nav-link">Join waitlist</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero wrap">
+  <div class="hero-meta hero-meta-top">
+    <span>Built in El Salvador</span>
+    <span class="dot-sep">·</span>
+    <a href="https://github.com/Gallegosdanielalexander/synathic" target="_blank" rel="noopener">
+      <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+      GitHub
+    </a>
+    <span class="dot-sep">·</span>
+    <a href="https://x.com/Foundergallegos" target="_blank" rel="noopener">
+      <svg viewBox="0 0 16 16" fill="currentColor"><path d="M9.53 6.78 15.17 0h-1.34L8.94 5.89 4.94 0H0l5.92 8.62L0 16h1.34l5.19-6.22L10.72 16H16L9.53 6.78Zm-1.84 2.2-.6-.86L2.32 1.04h2.06l3.85 5.51.6.86 5.01 7.17H11.8L7.69 8.98Z"/></svg>
+      X
+    </a>
+    <span class="dot-sep">·</span>
+    <a href="https://discord.gg/BAb4JjB6Y" target="_blank" rel="noopener">
+      <svg viewBox="0 0 16 16" fill="currentColor"><path d="M13.55 3.6a13.2 13.2 0 0 0-3.15-.95c-.14.24-.3.56-.4.82a12.3 12.3 0 0 0-3.6 0 8.4 8.4 0 0 0-.42-.82 13.1 13.1 0 0 0-3.15.96C.83 6.3.2 8.93.4 11.53a13.3 13.3 0 0 0 3.87 1.9c.31-.42.59-.87.83-1.34-.46-.17-.9-.38-1.31-.63.11-.08.22-.16.32-.25a9.5 9.5 0 0 0 7.78 0c.1.09.21.17.32.25-.41.25-.85.46-1.31.63.24.47.52.92.83 1.34a13.3 13.3 0 0 0 3.87-1.9c.24-3-.5-5.6-2.05-7.93ZM5.68 9.87c-.58 0-1.06-.53-1.06-1.18s.47-1.18 1.06-1.18 1.07.54 1.06 1.18c0 .65-.47 1.18-1.06 1.18Zm4.64 0c-.58 0-1.06-.53-1.06-1.18s.47-1.18 1.06-1.18 1.07.54 1.06 1.18c0 .65-.47 1.18-1.06 1.18Z"/></svg>
+      Discord
+    </a>
+  </div>
+
+  <h1 class="hero-fade d1">Your agent said it created the customer.<br>Your database says <span class="fail-word">otherwise</span>.</h1>
+  <p class="sub hero-fade d2">Synathic checks Postgres after every agent action — not the trace, not the 200 OK, the actual row. MVP launching August 22.</p>
+
+  <form class="waitlist-form hero-fade d3" id="waitlistForm">
+    <input type="email" id="emailInput" placeholder="you@company.com" required>
+    <button type="submit">Get early access</button>
+  </form>
+  <input type="text" class="db-input hero-fade d3" id="dbInput" placeholder="What database do you use? (optional)" form="waitlistForm">
+  <div class="waitlist-success" id="waitlistSuccess">You're in. Check your inbox for a confirmation. MVP opens soon — we'll ping you first.</div>
+  <p class="waitlist-note hero-fade d4">No spam. One email when it's ready. <a href="#how" class="secondary-cta">See how it works ↓</a></p>
+
+  <div class="terminal-tabs hero-fade d5" role="tablist">
+    <button class="terminal-tab active" id="tabFail" data-scenario="fail" role="tab" aria-selected="true">Failure caught</button>
+    <button class="terminal-tab" id="tabPass" data-scenario="pass" role="tab" aria-selected="false">Success verified</button>
+  </div>
+
+  <div class="terminal-shell hero-fade d5">
+    <div class="terminal-bar">
+      <span class="terminal-dot"></span><span class="terminal-dot"></span><span class="terminal-dot"></span>
+      <span class="terminal-label">reality_check.log</span>
+    </div>
+    <div class="terminal-body" id="terminalBody">
+      <div class="terminal-line"><span class="lbl">agent_report</span><span class="val" id="tLine1"></span></div>
+      <div class="terminal-line"><span class="lbl">tool_response</span><span class="val" id="tLine2"></span></div>
+      <div class="terminal-line"><span class="lbl">synathic_check</span><span class="val" id="tLine3"></span></div>
+      <div class="terminal-divider" id="tDivider" style="opacity:0"></div>
+      <div class="terminal-verdict" id="tVerdict" style="opacity:0"></div>
+    </div>
+  </div>
+</header>
+
+<section id="why-now" class="reveal why-now">
+  <div class="wrap">
+    <p class="why-now-text">AI agents went from demo to production in 12 months. But production-grade verification didn't keep up. <span>Synathic closes that gap.</span></p>
+  </div>
+</section>
+
+<section id="problem" class="reveal">
+  <div class="wrap">
+    <h2>The 200 OK doesn't mean what you think it means.</h2>
+    <p class="lead">Agents write to databases, CRMs, and APIs. When something breaks silently, nobody finds out until it's expensive.</p>
+    <div class="problem-grid">
+      <div class="problem-card reveal-child">
+        <span class="num">01 — async timing</span>
+        <h3>Out-of-order writes</h3>
+        <p>The agent reports success before downstream tools confirm the commit actually landed.</p>
+      </div>
+      <div class="problem-card reveal-child">
+        <span class="num">02 — silent rejection</span>
+        <h3>Validation swallows the error</h3>
+        <p>A downstream rule rejects the write. No exception. Logs stay green. Nobody notices for days.</p>
+      </div>
+      <div class="problem-card reveal-child">
+        <span class="num">03 — the real cost</span>
+        <h3>The uncertainty window</h3>
+        <p>Not the data repair — the days you don't know which records you can actually trust.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="before-after" class="reveal">
+  <div class="wrap">
+    <h2>Same failure. Two very different mornings.</h2>
+    <div class="compare">
+      <div class="compare-row">
+        <span class="compare-label">Without Synathic</span>
+        <div class="flow">
+          <span class="flow-step">Agent</span><span class="arrow">→</span>
+          <span class="flow-step">200 OK</span><span class="arrow">→</span>
+          <span class="flow-step muted">???</span><span class="arrow">→</span>
+          <span class="flow-step bad">Support ticket, 3 days later</span>
+        </div>
+      </div>
+      <div class="compare-row">
+        <span class="compare-label">With Synathic</span>
+        <div class="flow">
+          <span class="flow-step">Agent</span><span class="arrow">→</span>
+          <span class="flow-step">200 OK</span><span class="arrow">→</span>
+          <span class="flow-step">Synathic checks Postgres</span><span class="arrow">→</span>
+          <span class="flow-step good">Alert in 400ms</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="testimonials" class="reveal testimonials-section">
+  <div class="wrap">
+    <p class="section-label">Real silent failures</p>
+    <h2>What builders are saying.</h2>
+  </div>
+
+  <div class="marquee-wrap">
+    <div class="marquee-track" id="marqueeTrack">
+      <div class="t-card">
+        <svg class="t-quote" viewBox="0 0 24 24" fill="currentColor"><path d="M7.17 15.5c0-1.5.4-2.9 1.2-4.2.8-1.3 1.9-2.3 3.3-3l1 1.7c-1 .6-1.8 1.3-2.3 2.1-.5.8-.8 1.6-.8 2.4h2.6v5H7.17v-4Zm8 0c0-1.5.4-2.9 1.2-4.2.8-1.3 1.9-2.3 3.3-3l1 1.7c-1 .6-1.8 1.3-2.3 2.1-.5.8-.8 1.6-.8 2.4h2.6v5h-5v-4Z"/></svg>
+        <p class="t-quote-text">"Logs looked healthy. Only later did reporting data become inconsistent."</p>
+        <p class="t-attr">Full-stack AI dev, 2 incidents</p>
+      </div>
+      <div class="t-card">
+        <svg class="t-quote" viewBox="0 0 24 24" fill="currentColor"><path d="M7.17 15.5c0-1.5.4-2.9 1.2-4.2.8-1.3 1.9-2.3 3.3-3l1 1.7c-1 .6-1.8 1.3-2.3 2.1-.5.8-.8 1.6-.8 2.4h2.6v5H7.17v-4Zm8 0c0-1.5.4-2.9 1.2-4.2.8-1.3 1.9-2.3 3.3-3l1 1.7c-1 .6-1.8 1.3-2.3 2.1-.5.8-.8 1.6-.8 2.4h2.6v5h-5v-4Z"/></svg>
+        <p class="t-quote-text">"~40 bookings confirmed to users that never landed in Postgres."</p>
+        <p class="t-attr">Senior Full-Stack Engineer, 10 yrs</p>
+      </div>
+      <div class="t-card">
+        <svg class="t-quote" viewBox="0 0 24 24" fill="currentColor"><path d="M7.17 15.5c0-1.5.4-2.9 1.2-4.2.8-1.3 1.9-2.3 3.3-3l1 1.7c-1 .6-1.8 1.3-2.3 2.1-.5.8-.8 1.6-.8 2.4h2.6v5H7.17v-4Zm8 0c0-1.5.4-2.9 1.2-4.2.8-1.3 1.9-2.3 3.3-3l1 1.7c-1 .6-1.8 1.3-2.3 2.1-.5.8-.8 1.6-.8 2.4h2.6v5h-5v-4Z"/></svg>
+        <p class="t-quote-text">"It only appears under load because it's hard to reproduce."</p>
+        <p class="t-attr">AI Engineer, agentic systems</p>
+      </div>
+      <div class="t-card">
+        <svg class="t-quote" viewBox="0 0 24 24" fill="currentColor"><path d="M7.17 15.5c0-1.5.4-2.9 1.2-4.2.8-1.3 1.9-2.3 3.3-3l1 1.7c-1 .6-1.8 1.3-2.3 2.1-.5.8-.8 1.6-.8 2.4h2.6v5H7.17v-4Zm8 0c0-1.5.4-2.9 1.2-4.2.8-1.3 1.9-2.3 3.3-3l1 1.7c-1 .6-1.8 1.3-2.3 2.1-.5.8-.8 1.6-.8 2.4h2.6v5h-5v-4Z"/></svg>
+        <p class="t-quote-text">"A separate verification node when the backend state does not match."</p>
+        <p class="t-attr">Full-stack AI dev, CRM automation</p>
+      </div>
+      <div class="t-card">
+        <svg class="t-quote" viewBox="0 0 24 24" fill="currentColor"><path d="M7.17 15.5c0-1.5.4-2.9 1.2-4.2.8-1.3 1.9-2.3 3.3-3l1 1.7c-1 .6-1.8 1.3-2.3 2.1-.5.8-.8 1.6-.8 2.4h2.6v5H7.17v-4Zm8 0c0-1.5.4-2.9 1.2-4.2.8-1.3 1.9-2.3 3.3-3l1 1.7c-1 .6-1.8 1.3-2.3 2.1-.5.8-.8 1.6-.8 2.4h2.6v5h-5v-4Z"/></svg>
+        <p class="t-quote-text">"Observability becomes a nightmare when you can't tell if the callback fired before the write."</p>
+        <p class="t-attr">Lead AI Engineer, multi-agent</p>
+      </div>
+      <div class="t-card">
+        <svg class="t-quote" viewBox="0 0 24 24" fill="currentColor"><path d="M7.17 15.5c0-1.5.4-2.9 1.2-4.2.8-1.3 1.9-2.3 3.3-3l1 1.7c-1 .6-1.8 1.3-2.3 2.1-.5.8-.8 1.6-.8 2.4h2.6v5H7.17v-4Zm8 0c0-1.5.4-2.9 1.2-4.2.8-1.3 1.9-2.3 3.3-3l1 1.7c-1 .6-1.8 1.3-2.3 2.1-.5.8-.8 1.6-.8 2.4h2.6v5h-5v-4Z"/></svg>
+        <p class="t-quote-text">"Agent saying 'done' shouldn't be treated as proof the operation completed."</p>
+        <p class="t-attr">Founder, Nexariza AI — LangGraph + Supabase</p>
+      </div>
+      <div class="t-card">
+        <svg class="t-quote" viewBox="0 0 24 24" fill="currentColor"><path d="M7.17 15.5c0-1.5.4-2.9 1.2-4.2.8-1.3 1.9-2.3 3.3-3l1 1.7c-1 .6-1.8 1.3-2.3 2.1-.5.8-.8 1.6-.8 2.4h2.6v5H7.17v-4Zm8 0c0-1.5.4-2.9 1.2-4.2.8-1.3 1.9-2.3 3.3-3l1 1.7c-1 .6-1.8 1.3-2.3 2.1-.5.8-.8 1.6-.8 2.4h2.6v5h-5v-4Z"/></svg>
+        <p class="t-quote-text">"AI agents report 'Task Completed' when a silent DB constraint failed."</p>
+        <p class="t-attr">AI Automation Specialist, Paid Media</p>
+      </div>
+      <div class="t-card">
+        <svg class="t-quote" viewBox="0 0 24 24" fill="currentColor"><path d="M7.17 15.5c0-1.5.4-2.9 1.2-4.2.8-1.3 1.9-2.3 3.3-3l1 1.7c-1 .6-1.8 1.3-2.3 2.1-.5.8-.8 1.6-.8 2.4h2.6v5H7.17v-4Zm8 0c0-1.5.4-2.9 1.2-4.2.8-1.3 1.9-2.3 3.3-3l1 1.7c-1 .6-1.8 1.3-2.3 2.1-.5.8-.8 1.6-.8 2.4h2.6v5h-5v-4Z"/></svg>
+        <p class="t-quote-text">"Match the verification strategy to the business impact of the action."</p>
+        <p class="t-attr">Voice AI / CRM builder</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <p class="testimonials-footnote">+10 more independent validations across LangGraph, n8n, CrewAI, and custom stacks. <a href="mailto:hellosynathic@gmail.com?subject=Validation%20data%20request" class="secondary-cta">Ask for the full report →</a></p>
+  </div>
+</section>
+
+<section class="code-section reveal">
+  <div class="wrap">
+    <h2>Declare what "done" means. We check if it happened.</h2>
+    <p class="lead">Deterministic Postgres checks. Not an LLM judging its own work.</p>
+    <div class="code-block-wrap">
+      <button class="copy-btn" id="copyCodeBtn">Copy</button>
+      <div class="code-block" id="codeSample"><span class="cm"># pip install synathic</span><br><br><span class="kw">from</span> synathic <span class="kw">import</span> expect<br><br><span class="cm">@expect(postcondition=</span><span class="str">"row_exists"</span><span class="cm">, table=</span><span class="str">"customers"</span><span class="cm">, match_field=</span><span class="str">"email"</span><span class="cm">)</span><br><span class="kw">def</span> <span class="fn">create_customer</span>(email, name):<br>&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm"># your agent logic — unchanged</span><br>&nbsp;&nbsp;&nbsp;&nbsp;...</div>
+    </div>
+  </div>
+</section>
+
+<section id="how" class="reveal">
+  <div class="wrap">
+    <p class="section-label">How it works</p>
+    <h2>Fire-and-forget. Zero latency added to your agent.</h2>
+    <div class="steps">
+      <div class="step reveal-child">
+        <span class="step-status pending">RUNNING</span>
+        <div class="step-content">
+          <h3>Your agent runs normally</h3>
+          <p>The decorator wraps the function. Nothing about your agent's logic changes.</p>
+        </div>
+      </div>
+      <div class="step reveal-child">
+        <span class="step-status pending">PENDING</span>
+        <div class="step-content">
+          <h3>Synathic checks Postgres, async</h3>
+          <p>After the call returns, we verify the postcondition in a background task — off the request path.</p>
+        </div>
+      </div>
+      <div class="step reveal-child">
+        <span class="step-status pass">PASS / FAIL</span>
+        <div class="step-content">
+          <h3>You see reality, not the agent's word</h3>
+          <p>Row exists → pass. Row missing → fail, visible in seconds instead of a support ticket.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="faq" class="reveal">
+  <div class="wrap">
+    <p class="section-label">Questions</p>
+    <h2>Before you ask.</h2>
+    <div class="faq-list">
+      <details class="faq-item">
+        <summary>Does this add latency to my agent?</summary>
+        <p>No. The decorator returns immediately. Verification runs as a background task, off the request path — your agent never waits on it.</p>
+      </details>
+      <details class="faq-item">
+        <summary>What databases do you support?</summary>
+        <p>PostgreSQL today. MySQL and REST endpoint checks are next, based on what design partners actually need.</p>
+      </details>
+      <details class="faq-item">
+        <summary>How is this different from just logging?</summary>
+        <p>Logs show what your agent attempted. Synathic checks what the database actually did — a clean log doesn't mean the write landed.</p>
+      </details>
+      <details class="faq-item">
+        <summary>Do I need to change my agent's code?</summary>
+        <p>No. You wrap the function you already have with one decorator. The logic inside stays exactly as it is.</p>
+      </details>
+    </div>
+  </div>
+</section>
+
+<section id="waitlist" class="final-cta reveal">
+  <div class="wrap">
+    <p class="section-label">MVP launches August 22</p>
+    <h2>Be first to try it when it opens.</h2>
+    <p class="lead">Early users get legacy pricing, forever, and a direct line to the founder.</p>
+    <form class="waitlist-form" id="waitlistForm2">
+      <input type="email" id="emailInput2" placeholder="you@company.com" required>
+      <button type="submit">Get early access</button>
+    </form>
+    <input type="text" class="db-input" id="dbInput2" placeholder="What database do you use? (optional)" form="waitlistForm2">
+    <div class="waitlist-success" id="waitlistSuccess2">You're in. Check your inbox for a confirmation. MVP opens soon — we'll ping you first.</div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="footer-grid">
+      <div class="footer-brand">
+        <div class="logo">Synathic</div>
+        <p>Verification layer for AI agents. We check what the database says, not what the agent claims.</p>
+      </div>
+      <div class="footer-col">
+        <h4>Product</h4>
+        <a href="#how">How it works</a>
+        <a href="#faq">FAQ</a>
+        <a href="#waitlist">Waitlist</a>
+      </div>
+      <div class="footer-col">
+        <h4>Community</h4>
+        <a href="https://discord.gg/BAb4JjB6Y" target="_blank" rel="noopener">Discord</a>
+        <a href="https://youtube.com/@synathichq?si=OWsi5OWUFTTjM4WP" target="_blank" rel="noopener">YouTube</a>
+        <a href="https://www.instagram.com/synathic?igsh=dGN2aGNuZ2gzdzBv" target="_blank" rel="noopener">Instagram</a>
+        <a href="https://www.tiktok.com/@synathichq?_r=1&_t=ZS-98uQ0oHYaJc" target="_blank" rel="noopener">TikTok</a>
+        <span class="footer-soon">LinkedIn <span>(coming soon)</span></span>
+      </div>
+      <div class="footer-col">
+        <h4>Legal</h4>
+        <a href="privacy.html">Privacy Policy</a>
+        <a href="#">Terms</a>
+      </div>
+      <div class="footer-col">
+        <h4>Contact</h4>
+        <a href="mailto:hellosynathic@gmail.com">hellosynathic@gmail.com</a>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <p>© 2026 Synathic. Built in El Salvador.</p>
+      <div class="footer-social">
+        <a href="https://github.com/Gallegosdanielalexander/synathic" target="_blank" rel="noopener" aria-label="GitHub">
+          <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+        </a>
+        <a href="https://x.com/Foundergallegos" target="_blank" rel="noopener" aria-label="X">
+          <svg viewBox="0 0 16 16" fill="currentColor"><path d="M9.53 6.78 15.17 0h-1.34L8.94 5.89 4.94 0H0l5.92 8.62L0 16h1.34l5.19-6.22L10.72 16H16L9.53 6.78Zm-1.84 2.2-.6-.86L2.32 1.04h2.06l3.85 5.51.6.86 5.01 7.17H11.8L7.69 8.98Z"/></svg>
+        </a>
+        <a href="https://discord.gg/BAb4JjB6Y" target="_blank" rel="noopener" aria-label="Discord">
+          <svg viewBox="0 0 16 16" fill="currentColor"><path d="M13.55 3.6a13.2 13.2 0 0 0-3.15-.95c-.14.24-.3.56-.4.82a12.3 12.3 0 0 0-3.6 0 8.4 8.4 0 0 0-.42-.82 13.1 13.1 0 0 0-3.15.96C.83 6.3.2 8.93.4 11.53a13.3 13.3 0 0 0 3.87 1.9c.31-.42.59-.87.83-1.34-.46-.17-.9-.38-1.31-.63.11-.08.22-.16.32-.25a9.5 9.5 0 0 0 7.78 0c.1.09.21.17.32.25-.41.25-.85.46-1.31.63.24.47.52.92.83 1.34a13.3 13.3 0 0 0 3.87-1.9c.24-3-.5-5.6-2.05-7.93ZM5.68 9.87c-.58 0-1.06-.53-1.06-1.18s.47-1.18 1.06-1.18 1.07.54 1.06 1.18c0 .65-.47 1.18-1.06 1.18Zm4.64 0c-.58 0-1.06-.53-1.06-1.18s.47-1.18 1.06-1.18 1.07.54 1.06 1.18c0 .65-.47 1.18-1.06 1.18Z"/></svg>
+        </a>
+        <a href="mailto:hellosynathic@gmail.com" aria-label="Email">
+          <svg viewBox="0 0 16 16" fill="currentColor"><path d="M1.5 3h13A1.5 1.5 0 0 1 16 4.5v7A1.5 1.5 0 0 1 14.5 13h-13A1.5 1.5 0 0 1 0 11.5v-7A1.5 1.5 0 0 1 1.5 3Zm.2 1.2 5.6 4.13a1 1 0 0 0 1.2 0l5.6-4.13H1.7Zm-.2 1.03V11.5c0 .11.09.2.2.2h13a.2.2 0 0 0 .2-.2V5.23L9.11 9.5a2.2 2.2 0 0 1-2.62 0L1.5 5.23Z"/></svg>
+        </a>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<script>
+  // Waitlist forms submit to Formspree.
+  // 1. Go to https://formspree.io, create a free account and a new form.
+  // 2. Copy your form's endpoint (looks like https://formspree.io/f/xxxxxxxx)
+  // 3. Paste it below, replacing the placeholder.
+  const FORMSPREE_ENDPOINT = 'https://formspree.io/f/xdenlqgq';
+
+  function handleWaitlistSubmit(formId, inputId, dbInputId, successId){
+    const form = document.getElementById(formId);
+    const button = form.querySelector('button[type="submit"]');
+    const originalLabel = button.textContent;
+
+    form.addEventListener('submit', async function(e){
+      e.preventDefault();
+      const email = document.getElementById(inputId).value.trim();
+      const database = document.getElementById(dbInputId).value.trim();
+      if(!email) return;
+
+      button.disabled = true;
+      button.textContent = 'Joining…';
+
+      try{
+        const res = await fetch(FORMSPREE_ENDPOINT, {
+          method: 'POST',
+          headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: email,
+            database: database || 'not specified',
+            source: formId
+          })
+        });
+
+        if(res.ok){
+          form.style.display = 'none';
+          document.getElementById(dbInputId).style.display = 'none';
+          document.getElementById(successId).style.display = 'block';
+        } else {
+          throw new Error('Formspree responded with an error');
+        }
+      } catch(err){
+        button.disabled = false;
+        button.textContent = originalLabel;
+        let errEl = form.parentElement.querySelector('.waitlist-error[data-for="' + formId + '"]');
+        if(!errEl){
+          errEl = document.createElement('p');
+          errEl.className = 'waitlist-error';
+          errEl.setAttribute('data-for', formId);
+          errEl.textContent = "Something went wrong. Try again, or email hellosynathic@gmail.com directly.";
+          form.insertAdjacentElement('afterend', errEl);
+        }
+        errEl.style.display = 'block';
+      }
+    });
+  }
+  handleWaitlistSubmit('waitlistForm','emailInput','dbInput','waitlistSuccess');
+  handleWaitlistSubmit('waitlistForm2','emailInput2','dbInput2','waitlistSuccess2');
+
+  // Scroll-triggered fade-ins — soft, one-time, no jank
+  const revealEls = document.querySelectorAll('.reveal');
+  if('IntersectionObserver' in window){
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if(entry.isIntersecting){
+          entry.target.classList.add('is-visible');
+          observer.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.12, rootMargin: '0px 0px -40px 0px' });
+    revealEls.forEach(el => observer.observe(el));
+  } else {
+    revealEls.forEach(el => el.classList.add('is-visible'));
+  }
+
+  // --- Terminal "Reality Check" mini-demo: types itself out, switchable via tabs ---
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const t1 = document.getElementById('tLine1');
+  const t2 = document.getElementById('tLine2');
+  const t3 = document.getElementById('tLine3');
+  const tDivider = document.getElementById('tDivider');
+  const tVerdict = document.getElementById('tVerdict');
+  const tabFail = document.getElementById('tabFail');
+  const tabPass = document.getElementById('tabPass');
+
+  const scenarios = {
+    fail: {
+      line1: 'create_customer() → "success"',
+      line2: '200 OK',
+      checkText: 'checking postgres…',
+      badge: '<span class="status-badge status-fail pop">✘ ROW NOT FOUND</span>',
+      badgeStatic: '<span class="status-badge status-fail">✘ ROW NOT FOUND</span>',
+      verdict: 'Agent claimed success. Table <b>customers</b> was never written. Caught in 400ms — not 3 days.'
+    },
+    pass: {
+      line1: 'update_booking() → "success"',
+      line2: '200 OK',
+      checkText: 'checking postgres…',
+      badge: '<span class="status-badge status-pass pop">✓ ROW CONFIRMED</span>',
+      badgeStatic: '<span class="status-badge status-pass">✓ ROW CONFIRMED</span>',
+      verdict: 'Row exists in <b>bookings</b>, fields match. Agent\'s claim checks out — nothing to flag.'
+    }
+  };
+
+  function typeInto(el, text, speed, cursor, done){
+    let i = 0;
+    if(cursor) el.appendChild(cursor);
+    const iv = setInterval(() => {
+      if(cursor) cursor.remove();
+      el.textContent += text[i];
+      if(cursor) el.appendChild(cursor);
+      i++;
+      if(i >= text.length){
+        clearInterval(iv);
+        if(done) done();
+      }
+    }, speed);
+  }
+
+  function setTabsDisabled(disabled){
+    tabFail.disabled = disabled;
+    tabPass.disabled = disabled;
+  }
+
+  function runTerminalDemo(key){
+    const s = scenarios[key];
+    t1.textContent = ''; t2.textContent = ''; t3.innerHTML = '';
+    tDivider.style.opacity = '0';
+    tVerdict.classList.remove('show');
+    tVerdict.innerHTML = '';
+
+    if(reduceMotion){
+      t1.textContent = s.line1;
+      t2.textContent = s.line2;
+      t3.innerHTML = s.badgeStatic;
+      tDivider.style.opacity = '1';
+      tVerdict.innerHTML = s.verdict;
+      tVerdict.classList.add('show');
+      return;
+    }
+
+    setTabsDisabled(true);
+    const cursor = document.createElement('span');
+    cursor.className = 't-cursor';
+
+    typeInto(t1, s.line1, 26, cursor, () => {
+      setTimeout(() => {
+        typeInto(t2, s.line2, 30, cursor, () => {
+          setTimeout(() => {
+            typeInto(t3, s.checkText, 24, cursor, () => {
+              setTimeout(() => {
+                cursor.remove();
+                t3.innerHTML = s.badge;
+                setTimeout(() => {
+                  tDivider.style.opacity = '1';
+                  tVerdict.innerHTML = s.verdict;
+                  tVerdict.classList.add('show');
+                  setTabsDisabled(false);
+                }, 250);
+              }, 550);
+            });
+          }, 300);
+        });
+      }, 200);
+    });
+  }
+
+  function selectTab(key){
+    tabFail.classList.toggle('active', key === 'fail');
+    tabPass.classList.toggle('active', key === 'pass');
+    tabFail.setAttribute('aria-selected', key === 'fail');
+    tabPass.setAttribute('aria-selected', key === 'pass');
+    runTerminalDemo(key);
+  }
+
+  tabFail.addEventListener('click', () => { if(!tabFail.disabled) selectTab('fail'); });
+  tabPass.addEventListener('click', () => { if(!tabPass.disabled) selectTab('pass'); });
+
+  const terminalShell = document.querySelector('.terminal-shell');
+  if(terminalShell){
+    if(reduceMotion){
+      runTerminalDemo('fail');
+    } else {
+      let started = false;
+      const guardedRun = () => { if(!started){ started = true; runTerminalDemo('fail'); } };
+      terminalShell.addEventListener('animationend', guardedRun, { once: true });
+      setTimeout(guardedRun, 2200); // fallback in case animationend never fires
+    }
+  }
+
+  // Testimonials marquee: duplicate cards for a seamless infinite loop
+  const marqueeTrack = document.getElementById('marqueeTrack');
+  if(marqueeTrack && !reduceMotion){
+    const originalCards = Array.from(marqueeTrack.children);
+    originalCards.forEach(card => {
+      marqueeTrack.appendChild(card.cloneNode(true));
+    });
+  }
+
+  // Copy-to-clipboard for the code sample
+  const copyBtn = document.getElementById('copyCodeBtn');
+  if(copyBtn){
+    copyBtn.addEventListener('click', () => {
+      const code = document.getElementById('codeSample').innerText;
+      navigator.clipboard.writeText(code).then(() => {
+        const original = copyBtn.textContent;
+        copyBtn.textContent = 'Copied';
+        setTimeout(() => { copyBtn.textContent = original; }, 1600);
+      });
+    });
+  }
+</script>
+
+</body>
+</html>
