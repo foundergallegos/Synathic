@@ -38,3 +38,4 @@ class Verification(Base):
     expected_value = Column(String, nullable=True)
     status = Column(String, default="pending")
     checked_at = Column(DateTime, nullable=True)
+    error_message = Column(String, nullable=True)

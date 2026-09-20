@@ -4,7 +4,7 @@ from synathic import monitor, expect
 monitor.start()
 
 
-@expect(postcondition="row_exists", table="customers", match_field="email", sync=True)
+@expect(postcondition="row_exists", table="customers", match_field="email", sync=True, timestamp_column=None)
 async def create_customer_sync(email: str, name: str):
     print("[func] Creating customer (sync):", name, email)
     return {"status": "success", "customer_id": "sync-123"}

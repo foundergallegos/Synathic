@@ -1,6 +1,7 @@
 import functools
 import asyncio
 import uuid
+from datetime import datetime
 from .monitor import monitor
 
 def expect(
@@ -10,6 +11,7 @@ def expect(
     expected_field: str = None,
     expected_value: str = None,
     sync: bool = False,
+    timestamp_column: str | None = "updated_at",
 ):
     """Decorador para verificar una postcondicion tras ejecutar una herramienta.
 
@@ -24,6 +26,7 @@ def expect(
         @functools.wraps(func)
         async def async_wrapper(*args, **kwargs):
             execution_id = str(uuid.uuid4())
+            execution_start = datetime.utcnow()
 
             # Para flujos síncronos evitamos enviar el `tool_call`.
             if not sync:
@@ -56,6 +59,8 @@ def expect(
                 "table": table,
                 "field": match_field,
                 "value": value,
+                "execution_start": execution_start.isoformat(),
+                "timestamp_column": timestamp_column,
             }
 
             # Para field_equals, incluir el campo y el valor esperado extra.

@@ -21,6 +21,8 @@ app.include_router(router, prefix="/api")
 async def startup():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(text("ALTER TABLE IF EXISTS customers ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT now()"))
+        await conn.execute(text("ALTER TABLE IF EXISTS verifications ADD COLUMN IF NOT EXISTS error_message TEXT"))
     # Pre-warm DB connection pool: abrir varias conexiones y ejecutar una consulta simple
     try:
         warm_connections = 3

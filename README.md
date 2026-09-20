@@ -44,6 +44,7 @@ async def create_customer(email, name):
 ```
 
 That's it. Synathic checks Postgres after your function runs and tells you PASS or FAIL.
+By default, `row_exists` verifies both that the row exists and that its current state was written by this execution via the `updated_at` freshness check. If a table does not track updates, pass `timestamp_column=None` to explicitly opt out of freshness checking.
 
 > **Important today:** `table` and `match_field` must come from a fixed, hardcoded whitelist — currently `customers`, `executions`, `events`, `verifications`, each with a fixed set of allowed columns (see `backend/app/routes.py::ALLOWED_TABLES`). There is no config yet to point Synathic at your own schema. This is the main thing blocking anyone outside this repo from using it as-is — see **Known Limitations**.
 
@@ -71,6 +72,7 @@ When `sync=True`, Synathic verifies before your function returns. If the write d
 
 *Note: the README previously quoted "20-35ms once the pool is warm" for sync latency. We don't have a benchmark or test in this repo backing that number — treat it as unverified until it's actually measured, per our own no-fabricated-metrics rule.*
 
+<<<<<<< HEAD
 **Use sync when the user is waiting on the other end of the action. Use async for everything else.**
 
 ## Supported Verifications
@@ -118,6 +120,25 @@ All three ✅ postconditions are implemented in `backend/app/routes.py::_perform
 ## How it works
 
     [Your Agent]
+=======
+Guarantees
+Deterministic: SQL query, not an LLM guess. `row_exists` requires both presence and freshness: the matching row must have been updated after the current execution started, so stale rows cannot falsely pass.
+Non-blocking by default: Async mode adds zero latency. Sync mode is opt-in, only where you need it.
+Fire-and-forget on failure: If Synathic's backend is down, your agent keeps running — verification failing to report never breaks your agent.
+Safe against malformed input: Table names are checked against an explicit whitelist before touching SQL. A malicious or malformed table value returns a clear 400 error — it never reaches the database.
+If a target table has no timestamp column, use `timestamp_column=None` explicitly. The default is `updated_at`, and a missing column raises a clear verification error instead of silently weakening the guarantee.
+Supported Verifications
+✅ row_exists — PostgreSQL
+🚧 row_not_exists
+🚧 field_equals
+🚧 endpoint_returns — REST GET
+Supported Frameworks
+✅ Any Python async function (manual @expect decorator)
+🚧 LangGraph native callback handler (coming soon)
+🚧 CrewAI (coming soon)
+How it works
+[Your Agent] 
+>>>>>>> f64f99b (Fix causality check on field_equals, explicit error on value=None, unknown status on verification exceptions, clean pycache tracking)
     → wraps function with @expect(...)
     → runs normally, logic unchanged
     → SDK sends event to Synathic backend (async or sync, your choice)
