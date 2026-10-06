@@ -2,7 +2,8 @@ import functools
 import asyncio
 import inspect
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
+from typing import Optional
 from .monitor import monitor
 
 def expect(
@@ -12,7 +13,7 @@ def expect(
     expected_field: str = None,
     expected_value: str = None,
     sync: bool = False,
-    timestamp_column: str | None = "updated_at",
+    timestamp_column: Optional[str] = "updated_at",
 ):
     """Decorador para verificar una postcondicion tras ejecutar una herramienta.
 
@@ -34,7 +35,9 @@ def expect(
         @functools.wraps(func)
         async def async_wrapper(*args, **kwargs):
             execution_id = str(uuid.uuid4())
-            execution_start = datetime.utcnow()
+            execution_start = datetime.now(timezone.utc).replace(tzinfo=None)
+            # naive UTC; si el Postgres del cliente no está en UTC, usar db_dsn
+            # para que verify_client_side capture execution_start desde la DB
 
             # Para flujos síncronos evitamos enviar el `tool_call`.
             if not sync:
