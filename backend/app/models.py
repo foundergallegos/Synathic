@@ -37,5 +37,6 @@ class Verification(Base):
     expected_field = Column(String, nullable=True)
     expected_value = Column(String, nullable=True)
     status = Column(String, default="pending")
+    failure_category = Column(String, nullable=True)
     checked_at = Column(DateTime, nullable=True)
     error_message = Column(String, nullable=True)

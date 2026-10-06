@@ -1,7 +1,7 @@
 import asyncio
 from synathic import monitor, expect
 
-monitor.start()
+monitor.start(demo_mode=True)
 
 @expect(postcondition="row_exists", table="customers", match_field="email", timestamp_column=None)
 async def create_customer(email: str, name: str):

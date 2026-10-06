@@ -1,3 +1,5 @@
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .routes import router
@@ -5,11 +7,20 @@ from .models import Base
 from .database import engine, async_session
 from sqlalchemy import text
 
+API_KEY = os.getenv("SYNATHIC_API_KEY")
+if not API_KEY:
+    print("ADVERTENCIA: SYNATHIC_API_KEY no configurada, el backend acepta cualquier request")
+
 app = FastAPI(title="Synathic API")
+
+allow_origins = os.getenv("SYNATHIC_CORS_ORIGINS", "").split(",")
+allow_origins = [origin.strip() for origin in allow_origins if origin.strip()]
+if not allow_origins:
+    allow_origins = ["*"]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allow_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

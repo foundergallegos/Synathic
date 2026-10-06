@@ -1,54 +1,74 @@
-import json
-import sys
-import subprocess
+import asyncio
+import uuid
 
+import asyncpg
 import httpx
+import pytest
 
-URL = "http://127.0.0.1:8000/api/events-verify"
+API_URL = "http://127.0.0.1:8000/api/events-verify"
+DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/synathic"
 
-malicious_payload = {
-    "execution_id": "deadbeef-dead-beef-dead-beefdeadbeef",
-    "event_type": "tool_result",
-    "payload": {
-        "_skip_bg_verify": True,
-        "postcondition": {
-            "type": "row_exists",
-            "table": "customers; DROP TABLE customers; --",
-            "field": "email",
-            "value": "attacker@example.com"
-        }
-    }
-}
 
-def run_test():
+def post_event(payload):
     try:
         with httpx.Client(timeout=10.0) as client:
-            resp = client.post(URL, json=malicious_payload)
-            print("HTTP status:", resp.status_code)
-            try:
-                print("Response JSON:", json.dumps(resp.json(), indent=2))
-            except Exception:
-                print("Response text:", resp.text)
-    except Exception as e:
-        print("Request failed:", e)
+            return client.post(API_URL, json=payload)
+    except httpx.ConnectError as exc:
+        pytest.fail(f"Backend no disponible en {API_URL}: {exc}")
 
-    # Then run psql to list tables
+
+async def customers_table_count():
+    conn = await asyncpg.connect(DATABASE_URL)
     try:
-        cmd = ['psql', '-U', 'postgres', '-d', 'synathic', '-c', "\\dt"]
-        print("\nRunning psql to list tables:")
-        env = None
-        try:
-            import os
-            env = os.environ.copy()
-            env['PGPASSWORD'] = 'postgres'
-        except Exception:
-            env = None
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=False, env=env)
-        print(proc.stdout)
-        if proc.stderr:
-            print("psql stderr:", proc.stderr)
-    except Exception as e:
-        print("psql command failed:", e)
+        return await conn.fetchval(
+            "SELECT count(*) FROM information_schema.tables WHERE table_name = 'customers'"
+        )
+    finally:
+        await conn.close()
 
-if __name__ == '__main__':
-    run_test()
+
+def test_sql_injection_table_rejected():
+    payload = {
+        "execution_id": str(uuid.uuid4()),
+        "agent_name": "sql_injection_regression",
+        "event_type": "tool_result",
+        "payload": {
+            "_skip_bg_verify": True,
+            "postcondition": {
+                "type": "row_exists",
+                "table": "customers; DROP TABLE customers; --",
+                "field": "email",
+                "value": "attacker@example.com",
+            },
+        },
+    }
+
+    response = post_event(payload)
+    assert response.status_code == 400
+    body = response.json()
+    assert body.get("error") in {"table_not_allowed", "invalid_postcondition"}
+
+    table_count = asyncio.run(customers_table_count())
+    assert table_count == 1
+
+
+def test_sql_injection_column_rejected():
+    payload = {
+        "execution_id": str(uuid.uuid4()),
+        "agent_name": "sql_injection_regression",
+        "event_type": "tool_result",
+        "payload": {
+            "_skip_bg_verify": True,
+            "postcondition": {
+                "type": "row_exists",
+                "table": "customers",
+                "field": "email; DROP TABLE customers; --",
+                "value": "attacker@example.com",
+            },
+        },
+    }
+
+    response = post_event(payload)
+    assert response.status_code == 400
+    body = response.json()
+    assert body.get("error") in {"column_not_allowed", "invalid_postcondition"}

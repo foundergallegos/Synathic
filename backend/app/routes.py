@@ -1,8 +1,10 @@
 from types import SimpleNamespace
+import os
 from typing import Optional
 
-from fastapi import APIRouter, Depends, BackgroundTasks, Request
+from fastapi import APIRouter, Depends, BackgroundTasks, Request, Security, HTTPException
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import text
@@ -10,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 import asyncpg
 from .database import get_db, async_session, DATABASE_URL
 from .models import Execution, Event, Verification
+from .classifier import classify_failure
 
 ASYNCPG_DATABASE_URL = DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://") if DATABASE_URL.startswith("postgresql+asyncpg://") else DATABASE_URL
 import uuid
@@ -17,7 +20,20 @@ from datetime import datetime
 import time
 from time import perf_counter
 
-router = APIRouter()
+security = HTTPBearer(auto_error=False)
+
+
+async def verify_api_key(
+    credentials: HTTPAuthorizationCredentials = Security(security),
+):
+    api_key = os.getenv("SYNATHIC_API_KEY")
+    if not api_key:
+        return
+    if credentials is None or credentials.credentials != api_key:
+        raise HTTPException(status_code=401, detail="API key inválida")
+
+
+router = APIRouter(dependencies=[Depends(verify_api_key)])
 
 TIMESTAMP_COLUMN_CACHE = {}
 
@@ -121,6 +137,9 @@ async def list_executions(db: AsyncSession = Depends(get_db)):
 
 @router.get("/executions/{execution_id}")
 async def get_execution(execution_id: str, db: AsyncSession = Depends(get_db)):
+    await _ensure_verification_schema(db)
+    await db.commit()
+
     result = await db.execute(
         select(Execution).where(Execution.id == execution_id)
     )
@@ -145,6 +164,7 @@ async def get_execution(execution_id: str, db: AsyncSession = Depends(get_db)):
 async def _ensure_verification_schema(session: AsyncSession):
     try:
         await session.execute(text("ALTER TABLE IF EXISTS verifications ADD COLUMN IF NOT EXISTS error_message TEXT"))
+        await session.execute(text("ALTER TABLE IF EXISTS verifications ADD COLUMN IF NOT EXISTS failure_category VARCHAR"))
     except Exception:
         pass
 
@@ -202,6 +222,7 @@ async def _record_verification_exception(session: AsyncSession, execution_id: st
         conn = await asyncpg.connect(ASYNCPG_DATABASE_URL)
         try:
             await conn.execute("ALTER TABLE IF EXISTS verifications ADD COLUMN IF NOT EXISTS error_message TEXT")
+            await conn.execute("ALTER TABLE IF EXISTS verifications ADD COLUMN IF NOT EXISTS failure_category VARCHAR")
             await conn.execute(
                 """
                 INSERT INTO verifications (
@@ -324,6 +345,13 @@ async def _perform_verification(session: AsyncSession, execution_id: str, postco
                 checked_at=datetime.utcnow(),
             )
             session.add(verification)
+            if status == "fail":
+                try:
+                    result = classify_failure(execution_id, postcondition, None)
+                    verification.failure_category = result["category"]
+                except Exception as exc:
+                    print(f"[classify] error: {exc}")
+                    verification.failure_category = None
             t_commit_start = perf_counter()
             await session.commit()
             t_commit_end = perf_counter()
@@ -372,6 +400,14 @@ async def _perform_verification(session: AsyncSession, execution_id: str, postco
                 checked_at=datetime.utcnow(),
             )
             session.add(verification)
+            if status == "fail":
+                actual_row = {expected_field: row[0]} if row is not None else None
+                try:
+                    result = classify_failure(execution_id, postcondition, actual_row)
+                    verification.failure_category = result["category"]
+                except Exception as exc:
+                    print(f"[classify] error: {exc}")
+                    verification.failure_category = None
             t_commit_start = perf_counter()
             await session.commit()
             t_commit_end = perf_counter()

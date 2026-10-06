@@ -1,5 +1,6 @@
 import functools
 import asyncio
+import inspect
 import uuid
 from datetime import datetime
 from .monitor import monitor
@@ -23,6 +24,13 @@ def expect(
                           en esa fila es exactamente igual a `expected_value`.
     """
     def decorator(func):
+        sig = inspect.signature(func)
+        if match_field not in sig.parameters:
+            raise TypeError(
+                f"@expect: match_field={match_field!r} no es un parámetro de {func.__name__}. "
+                f"Parámetros disponibles: {list(sig.parameters)}"
+            )
+
         @functools.wraps(func)
         async def async_wrapper(*args, **kwargs):
             execution_id = str(uuid.uuid4())
@@ -52,7 +60,14 @@ def expect(
 
             # Valor usado para localizar la fila: normalmente el argumento
             # cuyo nombre coincide con match_field.
-            value = kwargs.get(match_field) or (args[0] if args else None)
+            bound = inspect.signature(func).bind(*args, **kwargs)
+            bound.apply_defaults()
+            value = bound.arguments.get(match_field)
+            if value is None:
+                raise ValueError(
+                    f"@expect: el valor de match_field={match_field!r} es None en esta llamada. "
+                    "Verifica que el argumento se esté pasando correctamente."
+                )
 
             postcondition_payload = {
                 "type": postcondition,
@@ -67,6 +82,50 @@ def expect(
             if postcondition == "field_equals":
                 postcondition_payload["expected_field"] = expected_field or match_field
                 postcondition_payload["expected_value"] = expected_value
+
+            if monitor.db_dsn is not None:
+                if sync:
+                    verification_status = await monitor.verify_client_side(postcondition_payload)
+                    await monitor.send_event(
+                        execution_id=execution_id,
+                        agent_name=func.__name__,
+                        event_type="tool_result",
+                        payload={
+                            "result": str(result),
+                            "postcondition": postcondition_payload,
+                            "_skip_bg_verify": True,
+                            "client_verification": verification_status,
+                        },
+                    )
+                    verification = {"mode": "client", "status": verification_status}
+                    if isinstance(result, dict):
+                        result["verification"] = verification
+                        return result
+                    return {"result": result, "verification": verification}
+
+                async def verify_and_report_client_side():
+                    try:
+                        verification_status = await monitor.verify_client_side(postcondition_payload)
+                    except Exception as exc:
+                        print(f"[monitor] client-side verification failed: {exc}")
+                        verification_status = "unknown"
+                    await monitor.send_event(
+                        execution_id=execution_id,
+                        agent_name=func.__name__,
+                        event_type="tool_result",
+                        payload={
+                            "result": str(result),
+                            "postcondition": postcondition_payload,
+                            "_skip_bg_verify": True,
+                            "client_verification": verification_status,
+                        },
+                    )
+
+                try:
+                    asyncio.create_task(verify_and_report_client_side())
+                except Exception:
+                    await verify_and_report_client_side()
+                return result
 
             # Si sync=True, usar el método que espera la verificación síncrona
             if sync:

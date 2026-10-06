@@ -27,6 +27,8 @@ async def call_event(
     execution_id: str,
     value: str,
     post_type: str,
+    execution_start: str | None,
+    timestamp_column: str | None = "updated_at",
     expected_field: str = None,
     expected_value: str = None,
 ):
@@ -36,6 +38,8 @@ async def call_event(
         "table": "customers",
         "field": "email",
         "value": value,
+        "execution_start": execution_start,
+        "timestamp_column": timestamp_column,
     }
     if post_type == "field_equals":
         postcondition["expected_field"] = expected_field or "name"
@@ -73,19 +77,34 @@ async def run_case(
     name: str = None,
     expected_field: str = None,
     expected_value: str = None,
+    timestamp_column: str | None = "updated_at",
+    insert_stale_row: bool = False,
+    execution_start_after_insert: bool = False,
 ) -> bool:
     execution_id = str(uuid.uuid4())
     print(f"\n=== Caso: {label} (tipo={post_type}, esperado={expected}) ===")
     print(f"execution_id: {execution_id}")
 
-    # 1) Opcionalmente insertar la fila de prueba en customers
+    # Use the database clock so the naive timestamp matches customers.updated_at.
+    execution_start = await conn.fetchval("SELECT now()::timestamp")
+
+    # 1) Opcionalmente insertar la fila de prueba en customers.
     if insert_row:
-        await conn.execute(
-            "INSERT INTO customers (name, email) VALUES ($1, $2)",
-            name or label,
-            value,
-        )
+        if insert_stale_row:
+            await conn.execute(
+                "INSERT INTO customers (name, email, updated_at) VALUES ($1, $2, now()::timestamp - interval '1 hour')",
+                name or label,
+                value,
+            )
+        else:
+            await conn.execute(
+                "INSERT INTO customers (name, email) VALUES ($1, $2)",
+                name or label,
+                value,
+            )
         print(f"Insertada fila en customers: email={value}, name={name or label}")
+        if execution_start_after_insert:
+            execution_start = await conn.fetchval("SELECT now()::timestamp")
 
     # 2) Llamar al endpoint simulando un tool_result
     resp = await call_event(
@@ -93,6 +112,8 @@ async def run_case(
         execution_id,
         value,
         post_type,
+        execution_start.isoformat(),
+        timestamp_column=timestamp_column,
         expected_field=expected_field,
         expected_value=expected_value,
     )
@@ -139,6 +160,12 @@ async def run_case(
 async def main() -> int:
     conn = await asyncpg.connect(DATABASE_URL)
     results = []
+    run_suffix = uuid.uuid4().hex[:8]
+    stale_row_emails = [
+        f"stale-row-exists-{run_suffix}@example.com",
+        f"stale-row-not-exists-{run_suffix}@example.com",
+        f"stale-row-opt-out-{run_suffix}@example.com",
+    ]
     try:
         # Asegurar que la tabla customers exista
         await conn.execute(CREATE_CUSTOMERS)
@@ -155,6 +182,7 @@ async def main() -> int:
                     insert_row=True,
                 )
             )
+
             # Caso 2: la fila NO existe -> "fail"
             results.append(
                 await run_case(
@@ -207,11 +235,42 @@ async def main() -> int:
                 )
             )
 
+            # --- causality and explicit freshness opt-out ---
+            results.append(
+                await run_case(
+                    client, conn,
+                    label="stale_row_row_exists_fail", value=stale_row_emails[0],
+                    post_type="row_exists", expected="fail",
+                    insert_row=True, insert_stale_row=True,
+                    execution_start_after_insert=True,
+                )
+            )
+            results.append(
+                await run_case(
+                    client, conn,
+                    label="stale_row_row_not_exists_pass", value=stale_row_emails[1],
+                    post_type="row_not_exists", expected="pass",
+                    insert_row=True, insert_stale_row=True,
+                    execution_start_after_insert=True,
+                )
+            )
+            results.append(
+                await run_case(
+                    client, conn,
+                    label="opt_out_row_exists_pass", value=stale_row_emails[2],
+                    post_type="row_exists", expected="pass",
+                    insert_row=True, insert_stale_row=True,
+                    execution_start_after_insert=True,
+                    timestamp_column=None,
+                )
+            )
+
         # Limpieza final de filas de customers usadas en las pruebas
         for email in (
             "exists@example.com", "missing_row@example.com",
             "free_email@example.com", "taken_email@example.com",
             "fe_ok@example.com", "fe_bad@example.com",
+            *stale_row_emails,
         ):
             await conn.execute(
                 "DELETE FROM customers WHERE email = $1", email
@@ -225,6 +284,8 @@ async def main() -> int:
         "row_exists ok", "row_exists fail",
         "row_not_exists ok", "row_not_exists fail",
         "field_equals ok", "field_equals fail",
+        "stale_row_row_exists_fail", "stale_row_row_not_exists_pass",
+        "opt_out_row_exists_pass",
     ]
     for idx, ok in enumerate(results, 1):
         print(f"  Caso {idx} ({labels[idx-1]}): {'PASS' if ok else 'FAIL'}")
