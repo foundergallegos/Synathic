@@ -10,7 +10,7 @@
     ✘ ROW NOT FOUND
 
     Agent claimed success. The row was never written.
-    Caught in 400ms — not 3 days from a support ticket.
+    Caught by a deterministic database check — not 3 days from a support ticket.
 
 That's what Synathic catches. A "200 OK" from your agent's tool call doesn't mean the database row exists. Synathic checks reality, deterministically — no LLM judging its own work, just SQL.
 
@@ -32,10 +32,12 @@ Synathic doesn't replace your error handling — it checks the one thing error h
 pip install synathic
 ```
 
+Python `>=3.10` is required. The SDK installs `asyncpg` for client-side verification.
+
 ```python
 from synathic import monitor, expect
 
-monitor.start()
+monitor.start(db_dsn="postgresql://synathic_ro:***@your-db:5432/yourdb")
 
 @expect(postcondition="row_exists", table="customers", match_field="email")
 async def create_customer(email, name):
@@ -43,8 +45,13 @@ async def create_customer(email, name):
     ...
 ```
 
-That's it. Synathic checks Postgres after your function runs and tells you PASS or FAIL.
-By default, `row_exists` checks that a matching row exists and that its `updated_at` timestamp is later than `execution_start`. This is a freshness signal, not proof that this invocation caused the write. If a table does not track updates, pass `timestamp_column=None` to explicitly opt out of freshness checking.
+Choose exactly one verification path when starting the monitor: `db_dsn` for client-side verification, or `demo_mode=True` to send events to the local Synathic backend. Omitting both or passing both raises `ValueError`.
+
+At decoration time, `inspect.signature` checks that `match_field` names a declared function parameter; a typo raises `TypeError` immediately. If that argument is `None` at call time, the decorator raises `ValueError`.
+
+With `db_dsn`, the SDK checks the customer's Postgres directly; the database credentials never travel to Synathic. With `demo_mode=True`, the event goes to the backend at `localhost:8000`, which checks its own Postgres.
+
+By default, postconditions filter against `updated_at > execution_start`. This timestamp is a freshness signal, not proof that this invocation caused the write. If a table does not track updates, pass `timestamp_column=None` to opt out. The SDK annotation is `Optional[str]`.
 
 > **Important today:** `table` and `match_field` must come from a fixed, hardcoded whitelist — currently `customers`, `executions`, `events`, `verifications`, each with a fixed set of allowed columns (see `backend/app/routes.py::ALLOWED_TABLES`). There is no config yet to point Synathic at your own schema. This is the main thing blocking anyone outside this repo from using it as-is — see **Known Limitations**.
 
@@ -76,9 +83,9 @@ When `sync=True`, Synathic verifies before your function returns. If the write d
 
 | Status | Postcondition | Notes |
 |---|---|---|
-| ✅ | `row_exists` | PostgreSQL. Confirms a matching row exists at check time. |
-| ✅ | `row_not_exists` | PostgreSQL. |
-| ✅ | `field_equals` | PostgreSQL. Compares a specific column's actual value against an expected one. |
+| ✅ | `row_exists` | PostgreSQL. Checks for a matching row, with freshness filtering by default. |
+| ✅ | `row_not_exists` | PostgreSQL. Checks for no matching fresh row by default. |
+| ✅ | `field_equals` | PostgreSQL. Compares a column against an expected value, with freshness filtering by default. |
 | 🚧 | `endpoint_returns` | REST GET — not started. |
 
 All three implemented postconditions are handled in `backend/app/routes.py::_perform_verification` and covered by `backend/test_e2e.py` (9 cases: pass/fail for each postcondition type, plus 3 causality cases).
@@ -88,23 +95,25 @@ All three implemented postconditions are handled in `backend/app/routes.py::_per
 ## Known Limitations (current, as of this repo)
 
 - **Fixed table whitelist.** Only 4 tables/columns are checkable, hardcoded in `routes.py`. No env-var, config file, or schema introspection yet. Anyone outside this project has to fork the backend to check their own tables.
-- **No enforced authentication.** `monitor.start(api_key=...)` accepts a key, but it is never sent as a header or validated anywhere in the request path. Any client that can reach the API can post events and read verification results. CORS is currently wide open (`allow_origins=["*"]`). Do not point this at a public endpoint.
 - **Causality vs. existence gap.** All three supported postconditions filter against `execution_start` using `updated_at` by default. The remaining limitation is that the target table must contain the selected, whitelisted timestamp column; the timestamp is a freshness signal, not proof of causality.
-- **Failure classifier not wired into the API.** `backend/app/classifier.py` implements deterministic failure categorization (race condition, stale row, value mismatch, format mismatch) and has its own internal smoke test, but no API endpoint calls it yet. It's not reachable from `/api/events` or `/api/events-verify` today — implemented, not integrated.
 - **Single-table, single-database checks only.** PostgreSQL only. A write that spans multiple tables or services is only partially covered by a single postcondition.
-- **Async-path error handling is silent.** On the default async flow, an invalid/malformed table name is caught in the background task and logged server-side, but no error is surfaced to the caller. The sync path (`/events-verify`) does return a proper `400` for the same case — the two paths behave differently today.
+- **Client-side path requires network access.** The process running the SDK must be able to reach the customer's Postgres using the supplied DSN.
+- **Async validation errors are not returned in the event response.** A verification exception is logged and recorded with status `unknown`; the original async event request has already returned.
+- **Fixed demo backend whitelist.** Path A's backend checks only the tables and columns in `ALLOWED_TABLES`; Path B validates identifier syntax but does not use that backend whitelist.
+- **API key configuration is optional.** When `SYNATHIC_API_KEY` is set, API requests require `Authorization: Bearer <key>` and the SDK sends the configured key. When unset, the backend accepts requests without authentication. Set it before exposing the backend beyond a trusted environment. CORS origins are configurable with `SYNATHIC_CORS_ORIGINS`; an unset or empty value falls back to `*`.
 
 ## Roadmap
 
 **Done**
 - Causality/existence fix: freshness is anchored to the execution start timestamp for the three supported postconditions.
+- API-key authentication using `SYNATHIC_API_KEY` and Bearer headers.
+- Failure classifier wired into verification records and `GET /api/executions/{id}`.
+- Client-side verification path using `db_dsn`.
 
 **Planned, not started**
 - Configurable table/column checks, replacing the hardcoded whitelist — prerequisite before this is usable outside this repo.
-- Real API authentication.
-- Wiring the failure classifier into the verification response so callers get a category, not just pass/fail.
 - `endpoint_returns` postcondition (REST GET).
-- Longer-term direction: MySQL support, broader REST API checks, governance/audit tooling.
+- MySQL support.
 
 ## Supported Frameworks
 
@@ -134,7 +143,8 @@ All three implemented postconditions are handled in `backend/app/routes.py::_per
 - **Deterministic:** SQL query, not an LLM guess. Either the row exists or it doesn't.
 - **Async verification:** the backend runs the postcondition check in a background task; the SDK still awaits event submission, but not the verification result.
 - **Backend request failures:** the SDK suppresses exceptions from `send_event`; an HTTP timeout can still delay event submission.
-- **SQL-injection safe on the sync path:** `/events-verify` checks table/column names against an explicit whitelist before touching SQL and returns a clear `400` on a bad name. The default async path (`/events`) currently swallows the same error silently instead of surfacing it — see Known Limitations.
+- **Failure classification:** failed verifications include a deterministic category, exposed as `failure_category` by `GET /api/executions/{id}`.
+- **SQL identifier validation:** `/events-verify` returns a clear `400` for table/column names outside the whitelist. In the async `/events` path, verification exceptions are logged and recorded as `unknown`; they are not returned in the original event response — see Known Limitations.
 
 ## Architecture notes (for the curious)
 
@@ -144,7 +154,7 @@ All three implemented postconditions are handled in `backend/app/routes.py::_per
 
 ## Status
 
-Early. MIT-licensed, launched August 2026. `row_exists`, `row_not_exists`, and `field_equals` are implemented and covered by an automated end-to-end test suite against a live Postgres instance. Not yet usable against a schema outside the built-in table whitelist, and not yet authenticated — treat this as a local/trusted-environment tool until those two items ship.
+Early-stage software. MIT-licensed. `row_exists`, `row_not_exists`, `field_equals`, client-side verification, API-key authentication, and failure classification are implemented; the end-to-end suite covers 9 cases. Synathic is not presented as production-proven, and the demo backend still uses a fixed table/column whitelist.
 
 ## License
 

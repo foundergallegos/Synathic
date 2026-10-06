@@ -32,6 +32,8 @@ Synathic doesn't replace your error handling. It checks the one thing error hand
 pip install synathic
 ```
 
+Requires Python `>=3.10`. The SDK package installs `asyncpg>=0.27.0` for direct client-side PostgreSQL verification.
+
 ```python
 from synathic import monitor, expect
 
@@ -44,9 +46,7 @@ async def create_customer(email, name):
     ...
 ```
 
-Synathic runs a `SELECT` after your function returns and tells you `pass` or `fail`.
-
-`monitor.start()` requires you to choose a verification path explicitly. With neither `db_dsn` nor `demo_mode=True`, it won't start. There is no silent default.
+`monitor.start()` requires exactly one verification path: `db_dsn` or `demo_mode=True`. With `db_dsn`, the SDK connects directly to your Postgres and runs the `SELECT` inside your infrastructure. Your database credentials are not sent to Synathic. With `demo_mode=True`, events go to the Synathic backend at `localhost:8000`, which checks its own Postgres.
 
 ### Minimal read-only role
 
@@ -61,9 +61,9 @@ GRANT SELECT ON customers TO synathic_ro;
 
 ## Two verification paths
 
-### Path B — Client-side (production): `db_dsn=...`
+### Path B — Client-side: `db_dsn=...`
 
-The SDK opens its own connection (`asyncpg`) directly to your Postgres using the DSN you provide. The `SELECT` runs *inside your infrastructure*, with your credentials. The pass/fail result can optionally be forwarded to the Synathic backend for history.
+The SDK opens its own connection (`asyncpg`) directly to your Postgres using the DSN you provide. The `SELECT` runs *inside your infrastructure*. The database credentials stay in the client process and are not sent to Synathic; only the event and verification result may be forwarded to the backend.
 
 **Your database credentials never travel to Synathic.**
 
@@ -73,7 +73,7 @@ monitor.start(db_dsn="postgresql://synathic_ro:***@your-db:5432/yourdb")
 
 ### Path A — Demo (against Synathic's own infrastructure): `demo_mode=True`
 
-The SDK sends the event over HTTP to the backend (FastAPI), which runs the `SELECT` against its own Postgres. Useful for trying the mechanism without pointing it at a real database. Every verification in this mode is explicitly marked as demo, so it can never be confused with a real one.
+The SDK sends the event over HTTP to the backend (FastAPI), which runs the `SELECT` against its own Postgres. This path is useful for trying the mechanism without pointing it at a real database. The backend checks its own database; it does not connect to the customer's database in this mode.
 
 ```python
 monitor.start(demo_mode=True)
@@ -81,7 +81,7 @@ monitor.start(demo_mode=True)
 
 ## Two execution modes
 
-**Async (default)** — for low/medium-risk actions. Doesn't block your agent; verification happens in the background.
+**Async (default)** — for low/medium-risk actions. The SDK submits the event and schedules verification in the background; it does not wait for the verification result, although event submission itself is awaited.
 
 ```python
 @expect(postcondition="row_exists", table="customers", match_field="email")
@@ -120,11 +120,11 @@ async def rename_customer(email, name):
     ...
 ```
 
-### Causality, not just existence
+### Freshness, not proof of causality
 
-By default, `row_exists` confirms that *a* row exists, not that *this invocation* wrote it. A stale row with the same match value would produce a false `pass`.
+The timestamp check reduces false passes caused by stale rows with the same match value, but does not prove that *this invocation* caused the write. By default, `timestamp_column` is `"updated_at"` and the check filters with `timestamp_column > execution_start`. The SDK captures `execution_start` as naive UTC using `datetime.now(timezone.utc)`. Use `timestamp_column=None` to opt out if the target table has no suitable timestamp column. The type annotation for the option is `Optional[str]`.
 
-To close that gap, all three postconditions accept an optional `timestamp_column`:
+All three postconditions accept an optional `timestamp_column`:
 
 ```python
 @expect(
@@ -137,9 +137,7 @@ async def create_customer(email, name):
     ...
 ```
 
-When set, the check requires that column to have advanced since a timestamp captured **before** the agent ran (`SELECT now()` on the same connection, to avoid clock skew between machines). An old row with the same value no longer produces a false `pass`.
-
-There is deliberately no forced default: you specify the column explicitly, per table.
+When enabled, a row with the same match value but an older timestamp does not satisfy the freshness filter. The timestamp remains a temporal signal rather than definitive proof of causality.
 
 ## Failure classification
 
@@ -161,7 +159,7 @@ Each classification includes the rules that fired and the evidence compared, so 
 1. You decorate an async function with `@expect(...)`.
 2. **At decoration time** (not on every call), Synathic validates that `match_field` is actually a parameter of the function. A typo blows up there, not in production.
 3. **On each call**, the real value of `match_field` is resolved by name (`inspect.signature(...).bind(...)`), never by position.
-4. If that value is `None`, nothing is verified and an explicit error is returned, instead of letting `field = NULL` produce a misleading pass/fail.
+4. If that value is `None`, the decorator raises an explicit `ValueError` instead of letting `field = NULL` produce a misleading pass/fail.
 5. Your agent function runs normally, unchanged.
 6. Depending on the path (A or B), the corresponding `SELECT` runs and yields `pass` / `fail`.
 7. With `sync=True` the result is returned with your function's response. In async mode nothing is blocked.
@@ -182,16 +180,14 @@ Each classification includes the rules that fired and the evidence compared, so 
 
 ## Security model
 
-- **SQL identifiers.** Table and column names can't be parameterized, so they are validated against a strict pattern (`^[a-z_][a-zA-Z0-9_]*$`) and quoted before interpolation. Path A additionally uses a static whitelist of its own tables/columns. Values are always passed as bound parameters.
-- **Data redaction.** By default (`capture_args=False`), the SDK does not send your function's arguments or full results to the backend, only what verification needs. Sending the full payload is an explicit opt-in (`capture_args=True`).
-- **Error sanitization.** A connection failure to your Postgres (wrong password, missing table permission…) is normalized to a generic message before being logged or forwarded. The full DSN, which carries the password, is never exposed.
-- **API authentication.** Every request under `/api` is validated against an API key configured through an environment variable and sent as `Authorization: Bearer`. CORS is restricted to explicitly configured origins, not left open.
+- **SQL identifiers.** Table and column names can't be parameterized, so client-side identifiers are checked against `^[a-z_][a-zA-Z0-9_]*$` before interpolation. Path A also uses a static whitelist of its tables and columns. Values are passed as bound parameters.
+- **Connection error sanitization.** Client-side connection failures are logged and raised with a generic message; the DSN is not included in that message.
+- **API authentication.** Requests under `/api` are validated against `SYNATHIC_API_KEY`; the SDK sends it as `Authorization: Bearer <key>` when configured. If the backend variable is unset, API requests are accepted without a key. CORS is configurable with `SYNATHIC_CORS_ORIGINS` and falls back to `*` when unset or empty.
 
 ## Guarantees
 
 - **Deterministic:** a SQL query, not an LLM guess. Either the row exists or it doesn't.
-- **Non-blocking by default:** async mode doesn't put verification on your agent's response path. Sync mode is opt-in, only where you need it.
-- **Fire-and-forget on backend-down:** if the Synathic backend is unreachable, your agent keeps running. Failing to report never breaks your agent.
+- **Async verification:** the async mode does not wait for the check result, but awaits event submission; SDK request exceptions are suppressed by the event sender.
 - **Your credentials stay with you** on the client-side path.
 
 ## Limitations
@@ -203,8 +199,9 @@ Each classification includes the rules that fired and the evidence compared, so 
 
 ## Roadmap
 
+- Configurable table/column checks to replace Path A's fixed whitelist.
 - `endpoint_returns` postcondition (REST GET).
-- Longer-term: MySQL support, broader REST API checks, governance/audit tooling.
+- MySQL support.
 
 ## Supported frameworks
 
@@ -220,11 +217,11 @@ Each classification includes the rules that fired and the evidence compared, so 
 pytest
 ```
 
-The suite covers `row_exists` / `row_not_exists` / `field_equals` end-to-end against a real Postgres (6 cases, pass and fail for each type), SQL-injection attempts on table names, `match_field` resolution and `value=None` handling, causality with a stale row, and `401` on missing credentials. The client-side path is covered by a smoke test using a `SELECT`-only Postgres role, including the missing-permission case.
+The E2E script covers 9 cases: pass/fail for `row_exists`, `row_not_exists`, and `field_equals`, plus 3 causality cases. Other tests cover SQL-injection rejection, `match_field` resolution, `value=None`, authentication, and client-side verification behavior.
 
 ## Status
 
-Early. MIT-licensed, launched August 2026. This README describes the architecture and test coverage. It is not evidence of production use by a customer or of measured usage metrics.
+Early-stage software. MIT-licensed. Client-side verification, demo mode, API-key authentication, and failure classification are implemented. The test suite documents current behavior; this is not evidence of production use by a customer or of measured usage metrics. Path A still uses the backend's fixed table/column whitelist.
 
 ## License
 
